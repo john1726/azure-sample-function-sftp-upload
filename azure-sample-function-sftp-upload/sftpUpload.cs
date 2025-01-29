@@ -1,23 +1,18 @@
-using System.Collections.Generic;
-using System.IO;
-using System.Net.Http;
+using Azure.Identity;
+using Azure.Security.KeyVault.Secrets;
 using Microsoft.Azure.WebJobs;
-using Microsoft.Azure.WebJobs.Host;
 using Microsoft.Extensions.Logging;
 using Renci.SshNet;
-using Renci.SshNet.Sftp;
-using Microsoft.Azure.KeyVault;
-using Microsoft.Azure.Services.AppAuthentication;
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Text;
+
 
 namespace sftpUpload
 {
     public static class sftpUpload
     {
-        // Http client for key vault
-        private static HttpClient kvhttpClient = new HttpClient();
-
         [FunctionName("sftpUpload")]
         public static async System.Threading.Tasks.Task RunAsync([BlobTrigger("uploads/{name}", Connection = "storageAcct")]Stream myBlob, string name, ILogger log)
         {
@@ -25,13 +20,12 @@ namespace sftpUpload
             log.LogInformation($"C# Blob trigger function Processed blob\n Name:{name} \n Size: {myBlob.Length} Bytes");
 
             // Grab Secrets and Keys from Azure KeyVault
-            // Reference: https://medium.com/statuscode/getting-key-vault-secrets-in-azure-functions-37620fd20a0b 
-            var azureServiceTokenProvider = new AzureServiceTokenProvider();
-            var kvClient = new KeyVaultClient(new KeyVaultClient.AuthenticationCallback(azureServiceTokenProvider.KeyVaultTokenCallback), kvhttpClient);
-            Microsoft.Azure.KeyVault.Models.SecretBundle secretBundle = await kvClient.GetSecretAsync(Environment.GetEnvironmentVariable("sftpkey"));
+            var credential = new DefaultAzureCredential();
+            var kvClient = new SecretClient(new Uri(Environment.GetEnvironmentVariable("KeyVaultUri")), credential);
+            KeyVaultSecret secret = await kvClient.GetSecretAsync(Environment.GetEnvironmentVariable("sftpkey"));
 
             // Convert key to stream data type for PrivateKeyFile variable
-            byte[] byteArray = Encoding.ASCII.GetBytes(secretBundle.Value);
+            byte[] byteArray = Encoding.ASCII.GetBytes(secret.Value);
             MemoryStream sshkey = new MemoryStream(byteArray);
 
             // Using SSH.Net Library: https://github.com/sshnet/SSH.NET ; Other ssh/sftp libs can be found here: https://www.sftp.net/client-libraries
@@ -49,7 +43,7 @@ namespace sftpUpload
             methods.Add(new PrivateKeyAuthenticationMethod(sftpUsername, keyFiles));
 
             // Connect to SFTP Server and Upload file 
-            ConnectionInfo con = new ConnectionInfo(host, 22, sftpUsername, methods.ToArray());
+            Renci.SshNet.ConnectionInfo con = new Renci.SshNet.ConnectionInfo(host, 22, sftpUsername, methods.ToArray());
             using (var client = new SftpClient(con))
             {
                 client.Connect();
